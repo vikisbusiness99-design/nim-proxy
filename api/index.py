@@ -120,26 +120,35 @@ def chat_completions():
                             reasoning = msg.get('reasoning_content', '').strip()
                             content = msg.get('content', '').strip()
                             
-                            # For roleplay, prioritize actual content over reasoning
-                            if content and len(content) > 10:
-                                # Use content as main response (reasoning can be verbose)
-                                msg['content'] = content
-                            elif reasoning and len(reasoning) > 10:
-                                # Fallback to reasoning if content is minimal
-                                msg['content'] = reasoning
-                            elif content:
+                            # ALWAYS prefer actual content over reasoning (even if short!)
+                            if content:
+                                # Use the actual content - this is what the bot meant to say
                                 msg['content'] = content
                             elif reasoning:
+                                # Only use reasoning if there's literally no content
                                 msg['content'] = reasoning
                             
                             # Debug logging
                             print(f"Original content: '{content}'")
-                            print(f"Reasoning: '{reasoning[:100]}...'")
-                            print(f"Final content: '{msg['content'][:100]}...'")
+                            print(f"Reasoning length: {len(reasoning)} chars")
+                            print(f"Final content being sent: '{msg['content']}'")
                             print(f"Final length: {len(msg['content'])} characters")
                             
                             # Remove reasoning_content field
                             msg.pop('reasoning_content', None)
+                        
+                        # CRITICAL: Remove empty tool_calls array (causes issues with some clients)
+                        if 'tool_calls' in msg and (not msg['tool_calls'] or len(msg['tool_calls']) == 0):
+                            del msg['tool_calls']
+                        
+                        # Remove NVIDIA-specific fields that aren't in OpenAI spec
+                        msg.pop('mm_embedding_handle', None)
+                        msg.pop('disaggregated_params', None)
+                    
+                    # Clean up choice-level NVIDIA fields
+                    choice.pop('mm_embedding_handle', None)
+                    choice.pop('disaggregated_params', None)
+                    choice.pop('avg_decoded_tokens_per_iter', None)
                         
                         # STEP 3: Final safety check - ensure content exists and isn't empty
                         if not msg.get('content') or len(msg.get('content', '').strip()) == 0:
@@ -150,6 +159,9 @@ def chat_completions():
                         if not msg.get('content') or msg.get('content').strip() == '':
                             print("WARNING: Empty content detected, using fallback")
                             msg['content'] = "I apologize, but I couldn't generate a proper response. Please try again."
+            
+            # Remove NVIDIA-specific top-level fields to ensure OpenAI compatibility
+            nvidia_response.pop('prompt_token_ids', None)
             
             # CRITICAL DEBUG: Log what we're actually sending back
             print("=" * 50)
