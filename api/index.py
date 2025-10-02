@@ -4,7 +4,6 @@ import os
 
 app = Flask(__name__)
 
-# Add CORS support for mobile apps
 @app.after_request
 def after_request(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -34,14 +33,13 @@ def chat_completions():
         model = openai_request.get('model', 'deepseek-ai/deepseek-r1')
         temperature = openai_request.get('temperature', 0.7)
         
-        # UPDATED: Force minimum tokens to prevent cutoff issues
         requested_max_tokens = openai_request.get('max_tokens')
         if requested_max_tokens is None:
-            max_tokens = 8192  # Default to 8K for good roleplay responses
+            max_tokens = 8192
         elif requested_max_tokens < 500:
-            max_tokens = 2048  # Force at least 2K tokens minimum to prevent cutoff
+            max_tokens = 2048
         else:
-            max_tokens = min(requested_max_tokens, 65536)  # Cap at 64K max
+            max_tokens = min(requested_max_tokens, 65536)
         
         stream = openai_request.get('stream', False)
         
@@ -84,10 +82,9 @@ def chat_completions():
                 f"{NVIDIA_BASE_URL}/chat/completions",
                 headers=headers,
                 json=nim_request,
-                timeout=300  # UPDATED: 5 minutes timeout for long responses
+                timeout=300
             )
             
-            # Check if request was successful
             if response.status_code != 200:
                 error_response = {
                     "error": {
@@ -100,85 +97,73 @@ def chat_completions():
             
             nvidia_response = response.json()
             
-            # CRITICAL DEBUG: Log the ENTIRE response structure
             print("=" * 50)
             print(f"Full NVIDIA Response: {nvidia_response}")
             print("=" * 50)
             
-            # CRITICAL FIX: Clean content IMMEDIATELY before any processing
-            if 'choices' in nvidia_response:
-                for choice in nvidia_response['choices']:
-                    if 'message' in choice:
-                        msg = choice['message']
-                        
-                        # STEP 1: Strip whitespace from content field RIGHT AWAY
-                        if 'content' in msg and msg['content']:
-                            msg['content'] = msg['content'].strip()
-                        
-                        # STEP 2: Handle reasoning_content
-                        if msg.get('reasoning_content'):
-                            reasoning = msg.get('reasoning_content', '').strip()
-                            content = msg.get('content', '').strip()
+            try:
+                if 'choices' in nvidia_response and len(nvidia_response['choices']) > 0:
+                    for choice in nvidia_response['choices']:
+                        if 'message' in choice:
+                            msg = choice['message']
                             
-                            # ALWAYS prefer actual content over reasoning (even if short!)
-                            if content:
-                                # Use the actual content - this is what the bot meant to say
-                                msg['content'] = content
-                            elif reasoning:
-                                # Only use reasoning if there's literally no content
-                                msg['content'] = reasoning
+                            if 'content' in msg and msg['content']:
+                                msg['content'] = msg['content'].strip()
                             
-                            # Debug logging
-                            print(f"Original content: '{content}'")
-                            print(f"Reasoning length: {len(reasoning)} chars")
-                            print(f"Final content being sent: '{msg['content']}'")
-                            print(f"Final length: {len(msg['content'])} characters")
+                            if 'reasoning_content' in msg:
+                                reasoning = msg.get('reasoning_content', '').strip()
+                                content = msg.get('content', '').strip()
+                                
+                                if content:
+                                    msg['content'] = content
+                                elif reasoning:
+                                    msg['content'] = reasoning
+                                
+                                print(f"Original content: '{content}'")
+                                print(f"Final content: '{msg['content']}'")
+                                
+                                del msg['reasoning_content']
                             
-                            # Remove reasoning_content field
-                            msg.pop('reasoning_content', None)
+                            if 'tool_calls' in msg:
+                                if not msg['tool_calls'] or len(msg['tool_calls']) == 0:
+                                    del msg['tool_calls']
+                            
+                            for field in ['mm_embedding_handle', 'disaggregated_params']:
+                                if field in msg:
+                                    del msg[field]
+                            
+                            if not msg.get('content'):
+                                msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
+                                print("WARNING: Empty content, using fallback")
                         
-                        # CRITICAL: Remove empty tool_calls array (causes issues with some clients)
-                        if 'tool_calls' in msg and (not msg['tool_calls'] or len(msg['tool_calls']) == 0):
-                            del msg['tool_calls']
-                        
-                        # Remove NVIDIA-specific fields that aren't in OpenAI spec
-                        msg.pop('mm_embedding_handle', None)
-                        msg.pop('disaggregated_params', None)
-                        
-                        # STEP 3: Final safety check - ensure content exists and isn't empty
-                        if not msg.get('content') or len(msg.get('content', '').strip()) == 0:
-                            msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
-                            print("WARNING: Empty content after processing, using fallback message")
-                    
-                    # Clean up choice-level NVIDIA fields (outside message block but inside choice loop)
-                    choice.pop('mm_embedding_handle', None)
-                    choice.pop('disaggregated_params', None)
-                    choice.pop('avg_decoded_tokens_per_iter', None)
-                        
-                        # Additional check: if content is still empty, provide fallback
-                        if not msg.get('content') or msg.get('content').strip() == '':
-                            print("WARNING: Empty content detected, using fallback")
-                            msg['content'] = "I apologize, but I couldn't generate a proper response. Please try again."
+                        for field in ['mm_embedding_handle', 'disaggregated_params', 'avg_decoded_tokens_per_iter']:
+                            if field in choice:
+                                del choice[field]
+                
+                if 'prompt_token_ids' in nvidia_response:
+                    del nvidia_response['prompt_token_ids']
+                
+            except Exception as e:
+                print(f"Error processing response: {e}")
+                import traceback
+                traceback.print_exc()
             
-            # Remove NVIDIA-specific top-level fields to ensure OpenAI compatibility
-            nvidia_response.pop('prompt_token_ids', None)
-            
-            # CRITICAL DEBUG: Log what we're actually sending back
             print("=" * 50)
             print(f"Sending back to Janitor: {nvidia_response}")
-            print(f"Response has choices: {len(nvidia_response.get('choices', []))}")
             if nvidia_response.get('choices'):
                 print(f"First choice content: '{nvidia_response['choices'][0]['message'].get('content', '')}'")
             print("=" * 50)
             
-            # Return the response as-is (NVIDIA API should already be OpenAI compatible)
             return jsonify(nvidia_response), 200
             
     except requests.exceptions.Timeout:
-        return jsonify({"error": "Request timeout - model took too long to respond"}), 504
+        return jsonify({"error": "Request timeout"}), 504
     except requests.exceptions.RequestException as e:
         return jsonify({"error": f"Request failed: {str(e)}"}), 500
     except Exception as e:
+        print(f"Unexpected error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
 @app.route('/api/v1/models', methods=['GET', 'OPTIONS'])
