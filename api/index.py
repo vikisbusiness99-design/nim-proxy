@@ -105,16 +105,17 @@ def chat_completions():
             print(f"Full NVIDIA Response: {nvidia_response}")
             print("=" * 50)
             
-            # IMPROVED: Fix DeepSeek R1 reasoning_content issue
+            # CRITICAL FIX: Clean content IMMEDIATELY before any processing
             if 'choices' in nvidia_response:
                 for choice in nvidia_response['choices']:
                     if 'message' in choice:
                         msg = choice['message']
-                        # CRITICAL FIX: Clean and combine content properly
-                        # Strip any leading/trailing whitespace from content first
-                        if 'content' in msg:
+                        
+                        # STEP 1: Strip whitespace from content field RIGHT AWAY
+                        if 'content' in msg and msg['content']:
                             msg['content'] = msg['content'].strip()
                         
+                        # STEP 2: Handle reasoning_content
                         if msg.get('reasoning_content'):
                             reasoning = msg.get('reasoning_content', '').strip()
                             content = msg.get('content', '').strip()
@@ -140,10 +141,10 @@ def chat_completions():
                             # Remove reasoning_content field
                             msg.pop('reasoning_content', None)
                         
-                        # Ensure content exists and isn't empty
+                        # STEP 3: Final safety check - ensure content exists and isn't empty
                         if not msg.get('content') or len(msg.get('content', '').strip()) == 0:
                             msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
-                            print("WARNING: Empty content, using fallback message")
+                            print("WARNING: Empty content after processing, using fallback message")
                         
                         # Additional check: if content is still empty, provide fallback
                         if not msg.get('content') or msg.get('content').strip() == '':
