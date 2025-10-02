@@ -108,18 +108,26 @@ def chat_completions():
                 for choice in nvidia_response['choices']:
                     if 'message' in choice:
                         msg = choice['message']
-                        # Always combine reasoning_content if it exists
+                        # FIXED: Always combine reasoning_content properly
                         if msg.get('reasoning_content'):
                             reasoning = msg.get('reasoning_content', '').strip()
                             content = msg.get('content', '').strip()
                             
-                            if content:
+                            # Combine reasoning and content - ALWAYS prefer showing both
+                            if reasoning and content:
+                                # Both exist - combine them
                                 msg['content'] = f"{reasoning}\n\n{content}"
-                            else:
+                            elif reasoning:
+                                # Only reasoning exists
                                 msg['content'] = reasoning
+                            elif content:
+                                # Only content exists (shouldn't happen but just in case)
+                                msg['content'] = content
                             
                             # Debug logging
-                            print(f"Combined content length: {len(msg['content'])} characters")
+                            print(f"Original content: {content[:100]}...")
+                            print(f"Reasoning length: {len(reasoning)} chars")
+                            print(f"Final combined content length: {len(msg['content'])} characters")
                             
                             # Remove reasoning_content to avoid confusion
                             msg.pop('reasoning_content', None)
