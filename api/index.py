@@ -144,16 +144,16 @@ def chat_completions():
                         # Remove NVIDIA-specific fields that aren't in OpenAI spec
                         msg.pop('mm_embedding_handle', None)
                         msg.pop('disaggregated_params', None)
-                    
-                    # Clean up choice-level NVIDIA fields
-                    choice.pop('mm_embedding_handle', None)
-                    choice.pop('disaggregated_params', None)
-                    choice.pop('avg_decoded_tokens_per_iter', None)
                         
                         # STEP 3: Final safety check - ensure content exists and isn't empty
                         if not msg.get('content') or len(msg.get('content', '').strip()) == 0:
                             msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
                             print("WARNING: Empty content after processing, using fallback message")
+                    
+                    # Clean up choice-level NVIDIA fields (outside message block but inside choice loop)
+                    choice.pop('mm_embedding_handle', None)
+                    choice.pop('disaggregated_params', None)
+                    choice.pop('avg_decoded_tokens_per_iter', None)
                         
                         # Additional check: if content is still empty, provide fallback
                         if not msg.get('content') or msg.get('content').strip() == '':
