@@ -110,6 +110,10 @@ def chat_completions():
                             if 'content' in msg and msg['content']:
                                 msg['content'] = msg['content'].strip()
                             
+                            # Add OpenAI-required fields that might be missing
+                            if 'refusal' not in msg:
+                                msg['refusal'] = None
+                            
                             if 'reasoning_content' in msg:
                                 reasoning = msg.get('reasoning_content', '').strip()
                                 content = msg.get('content', '').strip()
@@ -136,7 +140,7 @@ def chat_completions():
                                 msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
                                 print("WARNING: Empty content, using fallback")
                         
-                        for field in ['mm_embedding_handle', 'disaggregated_params', 'avg_decoded_tokens_per_iter']:
+                        for field in ['mm_embedding_handle', 'disaggregated_params', 'avg_decoded_tokens_per_iter', 'stop_reason']:
                             if field in choice:
                                 del choice[field]
                 
