@@ -100,42 +100,63 @@ def chat_completions():
             
             nvidia_response = response.json()
             
-            # Log the response for debugging (you can check Vercel logs)
-            print(f"NVIDIA Response: {nvidia_response}")
+            # CRITICAL DEBUG: Log the ENTIRE response structure
+            print("=" * 50)
+            print(f"Full NVIDIA Response: {nvidia_response}")
+            print("=" * 50)
             
             # IMPROVED: Fix DeepSeek R1 reasoning_content issue
             if 'choices' in nvidia_response:
                 for choice in nvidia_response['choices']:
                     if 'message' in choice:
                         msg = choice['message']
-                        # FIXED: Always combine reasoning_content properly
+                        # CRITICAL FIX: Clean and combine content properly
+                        # Strip any leading/trailing whitespace from content first
+                        if 'content' in msg:
+                            msg['content'] = msg['content'].strip()
+                        
                         if msg.get('reasoning_content'):
                             reasoning = msg.get('reasoning_content', '').strip()
                             content = msg.get('content', '').strip()
                             
-                            # Combine reasoning and content - ALWAYS prefer showing both
-                            if reasoning and content:
-                                # Both exist - combine them
-                                msg['content'] = f"{reasoning}\n\n{content}"
-                            elif reasoning:
-                                # Only reasoning exists
+                            # For roleplay, prioritize actual content over reasoning
+                            if content and len(content) > 10:
+                                # Use content as main response (reasoning can be verbose)
+                                msg['content'] = content
+                            elif reasoning and len(reasoning) > 10:
+                                # Fallback to reasoning if content is minimal
                                 msg['content'] = reasoning
                             elif content:
-                                # Only content exists (shouldn't happen but just in case)
                                 msg['content'] = content
+                            elif reasoning:
+                                msg['content'] = reasoning
                             
                             # Debug logging
-                            print(f"Original content: {content[:100]}...")
-                            print(f"Reasoning length: {len(reasoning)} chars")
-                            print(f"Final combined content length: {len(msg['content'])} characters")
+                            print(f"Original content: '{content}'")
+                            print(f"Reasoning: '{reasoning[:100]}...'")
+                            print(f"Final content: '{msg['content'][:100]}...'")
+                            print(f"Final length: {len(msg['content'])} characters")
                             
-                            # Remove reasoning_content to avoid confusion
+                            # Remove reasoning_content field
                             msg.pop('reasoning_content', None)
+                        
+                        # Ensure content exists and isn't empty
+                        if not msg.get('content') or len(msg.get('content', '').strip()) == 0:
+                            msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
+                            print("WARNING: Empty content, using fallback message")
                         
                         # Additional check: if content is still empty, provide fallback
                         if not msg.get('content') or msg.get('content').strip() == '':
                             print("WARNING: Empty content detected, using fallback")
                             msg['content'] = "I apologize, but I couldn't generate a proper response. Please try again."
+            
+            # CRITICAL DEBUG: Log what we're actually sending back
+            print("=" * 50)
+            print(f"Sending back to Janitor: {nvidia_response}")
+            print(f"Response has choices: {len(nvidia_response.get('choices', []))}")
+            if nvidia_response.get('choices'):
+                print(f"First choice content: '{nvidia_response['choices'][0]['message'].get('content', '')}'")
+            print("=" * 50)
             
             # Return the response as-is (NVIDIA API should already be OpenAI compatible)
             return jsonify(nvidia_response), 200
