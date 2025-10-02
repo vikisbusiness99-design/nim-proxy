@@ -30,7 +30,7 @@ def chat_completions():
         openai_request = request.get_json()
         
         messages = openai_request.get('messages', [])
-        model = openai_request.get('model', 'deepseek-ai/deepseek-r1')
+        model = openai_request.get('model', 'deepseek-ai/deepseek-r1-0528')
         temperature = openai_request.get('temperature', 0.7)
         
         requested_max_tokens = openai_request.get('max_tokens')
