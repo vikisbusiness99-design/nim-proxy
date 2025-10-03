@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify, Response
 import requests
 import os
+import time
+import json
 
 app = Flask(__name__)
 
@@ -23,6 +25,9 @@ def health_check():
 @app.route('/api/v1/chat/completions', methods=['POST', 'OPTIONS'])
 @app.route('/v1/chat/completions', methods=['POST', 'OPTIONS'])
 def chat_completions():
+    start_time = time.time()
+    print(f"[TIMING] Request started at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
     if request.method == 'OPTIONS':
         return '', 204
     
@@ -30,7 +35,7 @@ def chat_completions():
         openai_request = request.get_json()
         
         messages = openai_request.get('messages', [])
-        model = openai_request.get('model', 'deepseek-ai/deepseek-r1-0528')
+        model = openai_request.get('model', 'deepseek-ai/deepseek-r1')
         temperature = openai_request.get('temperature', 0.7)
         
         requested_max_tokens = openai_request.get('max_tokens')
@@ -42,6 +47,7 @@ def chat_completions():
             max_tokens = min(requested_max_tokens, 65536)
         
         stream = openai_request.get('stream', False)
+        print(f"[STREAMING] Stream mode: {stream}")
         
         nim_request = {
             "model": model,
@@ -63,20 +69,104 @@ def chat_completions():
             "Content-Type": "application/json"
         }
         
+        print(f"[TIMING] Sending request to NVIDIA API...")
+        api_start = time.time()
+        
         if stream:
             response = requests.post(
                 f"{NVIDIA_BASE_URL}/chat/completions",
                 headers=headers,
                 json=nim_request,
-                stream=True
+                stream=True,
+                timeout=300
             )
             
-            def generate():
-                for line in response.iter_lines():
-                    if line:
-                        yield line + b'\n'
+            print(f"[TIMING] Stream connection established in {time.time() - api_start:.2f}s")
             
-            return Response(generate(), mimetype='text/event-stream')
+            def generate():
+                try:
+                    chunk_count = 0
+                    for line in response.iter_lines():
+                        if not line:
+                            continue
+                        
+                        try:
+                            decoded_line = line.decode('utf-8').strip()
+                        except:
+                            continue
+                        
+                        if not decoded_line:
+                            continue
+                        
+                        if decoded_line.startswith('data: '):
+                            decoded_line = decoded_line[6:]
+                        
+                        if decoded_line == '[DONE]':
+                            print(f"[STREAMING] Received [DONE], sent {chunk_count} chunks")
+                            yield b'data: [DONE]\n\n'
+                            break
+                        
+                        try:
+                            chunk_data = json.loads(decoded_line)
+                            
+                            if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
+                                for choice in chunk_data['choices']:
+                                    if 'delta' in choice:
+                                        delta = choice['delta']
+                                        
+                                        if 'reasoning_content' in delta:
+                                            del delta['reasoning_content']
+                                        
+                                        if not delta.get('content') and delta.keys() == {'role'}:
+                                            continue
+                                    
+                                    for field in ['mm_embedding_handle', 'disaggregated_params', 'avg_decoded_tokens_per_iter', 'stop_reason']:
+                                        if field in choice:
+                                            del choice[field]
+                            
+                            if 'prompt_token_ids' in chunk_data:
+                                del chunk_data['prompt_token_ids']
+                            
+                            chunk_count += 1
+                            
+                            chunk_json = json.dumps(chunk_data)
+                            yield f'data: {chunk_json}\n\n'.encode('utf-8')
+                            
+                            if chunk_count == 1:
+                                print(f"[STREAMING] First chunk sent successfully")
+                            
+                        except json.JSONDecodeError as e:
+                            print(f"[WARNING] Failed to parse chunk: {decoded_line[:100]}")
+                            continue
+                    
+                    elapsed = time.time() - start_time
+                    print(f"[TIMING] Stream completed in {elapsed:.2f} seconds, sent {chunk_count} chunks")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Stream error: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    error_chunk = {
+                        "id": "error",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": f"\n\n[Error: {str(e)}]"},
+                            "finish_reason": "stop"
+                        }]
+                    }
+                    yield f'data: {json.dumps(error_chunk)}\n\n'.encode('utf-8')
+                    yield b'data: [DONE]\n\n'
+            
+            return Response(generate(), 
+                          mimetype='text/event-stream',
+                          headers={
+                              'Cache-Control': 'no-cache',
+                              'X-Accel-Buffering': 'no'
+                          })
         else:
             response = requests.post(
                 f"{NVIDIA_BASE_URL}/chat/completions",
@@ -84,6 +174,9 @@ def chat_completions():
                 json=nim_request,
                 timeout=300
             )
+            
+            api_time = time.time() - api_start
+            print(f"[TIMING] NVIDIA API responded in {api_time:.2f}s")
             
             if response.status_code != 200:
                 error_response = {
@@ -109,6 +202,9 @@ def chat_completions():
                             
                             if 'content' in msg and msg['content']:
                                 msg['content'] = msg['content'].strip()
+                            
+                            if 'refusal' not in msg:
+                                msg['refusal'] = None
                             
                             if 'reasoning_content' in msg:
                                 reasoning = msg.get('reasoning_content', '').strip()
@@ -136,7 +232,7 @@ def chat_completions():
                                 msg['content'] = "I apologize, but I couldn't generate a response. Please try again."
                                 print("WARNING: Empty content, using fallback")
                         
-                        for field in ['mm_embedding_handle', 'disaggregated_params', 'avg_decoded_tokens_per_iter']:
+                        for field in ['mm_embedding_handle', 'disaggregated_params', 'avg_decoded_tokens_per_iter', 'stop_reason']:
                             if field in choice:
                                 del choice[field]
                 
@@ -154,13 +250,22 @@ def chat_completions():
                 print(f"First choice content: '{nvidia_response['choices'][0]['message'].get('content', '')}'")
             print("=" * 50)
             
+            elapsed = time.time() - start_time
+            print(f"[TIMING] Total request time: {elapsed:.2f} seconds")
+            
             return jsonify(nvidia_response), 200
             
     except requests.exceptions.Timeout:
+        elapsed = time.time() - start_time
+        print(f"[TIMING] Request timed out after {elapsed:.2f} seconds")
         return jsonify({"error": "Request timeout"}), 504
     except requests.exceptions.RequestException as e:
+        elapsed = time.time() - start_time
+        print(f"[TIMING] Request failed after {elapsed:.2f} seconds")
         return jsonify({"error": f"Request failed: {str(e)}"}), 500
     except Exception as e:
+        elapsed = time.time() - start_time
+        print(f"[TIMING] Unexpected error after {elapsed:.2f} seconds")
         print(f"Unexpected error: {str(e)}")
         import traceback
         traceback.print_exc()
